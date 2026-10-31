@@ -29,7 +29,7 @@ signal raid_incoming(from: AltStreamUser, _raider_count: int) # raider count cur
 signal raid_outgoing_started(target: AltStreamUser, viewer_count: int, countdown: int)
 signal raid_outgoing_canceled()
 
-signal kofi_tip_received(from: AltStreamUser, type: String, amount: String, currency: String)
+#signal kofi_tip_received(from: AltStreamUser, type: String, amount: String, currency: String)
 
 signal reward_redeemed(user: AltStreamUser, message_id: String, reward_name: String, user_input: String)
 signal user_shouted_out(target: AltStreamUser, game_name: String, game_cover_url: String, shouted_by: AltStreamUser)
