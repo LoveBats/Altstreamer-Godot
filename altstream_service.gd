@@ -5,215 +5,223 @@ const HOST		:= "https://altstream.online"
 const API_ENDPOINT	:= "/api"
 const CHAT_ENDPOINT	:= "/chat/stream?channel=%s"
 
+enum Role {
+    BROADCASTER, # The streamer.
+    MODERATOR,   # Channel moderator.
+    SUBSCRIBER,  # Platform supporter.
+    SUPPORTER,   # Channel supporter.
+    # NOTE: Yes this is confusing. Hopefully it'll will get fixed.
+}
+
 signal connected
 signal disconnected
 signal connection_failed
 
 signal chat_message_received(user: AltStreamUser, message: AltStreamMessage)
-signal chat_message_sticker_received(user: AltStreamUser, message_id: String, _name: String, url: String) # name currently unvailable
+signal chat_sticker_received(user: AltStreamUser, message_id: String, name: String, url: String)
+signal chat_highlight_received(user: AltStreamUser, message: AltStreamMessage, reward_name: String)
 signal chat_message_pinned(user: AltStreamUser, message: AltStreamMessage, pinned_by: String)
 signal chat_message_unpinned()
 signal chat_message_deleted(message_id: String)
 signal chat_cleared()
 
-signal highlight_received(user: AltStreamUser, message: AltStreamMessage, reward_name: String)
-
-signal raid_incoming(from: AltStreamUser, raider_count: int)
+signal raid_incoming(from: AltStreamUser, _raider_count: int) # raider count currently unavailable
 signal raid_outgoing_started(target: AltStreamUser, viewer_count: int, countdown: int)
 signal raid_outgoing_canceled()
 
 signal kofi_tip_received(from: AltStreamUser, type: String, amount: String, currency: String)
 
 signal reward_redeemed(user: AltStreamUser, message_id: String, reward_name: String, user_input: String)
-signal shoutout(target: AltStreamUser, game_name: String, game_cover_url: String, shouted_by: AltStreamUser)
+signal user_shouted_out(target: AltStreamUser, game_name: String, game_cover_url: String, shouted_by: AltStreamUser)
 
 @export var autoconnect := true
 @export var channel := ""
 
+func start(channel_connect: String = channel) -> void:
+    if client.status == EventStreamClient.Status.DISCONNECTED:
+        if not channel_connect.is_empty():
+            client.connect_to_host(HOST, API_ENDPOINT + CHAT_ENDPOINT % channel_connect)
+        else:
+            print("No channel specified for Altstreamer connection")
+    else:
+        print("EventStream not disconnected, could not initiate new connection.")
+
+func stop() -> void:
+    client.close()
+
+# Above this comment is the public API of this type.
+# Below you can find the implementation details.
+# You should not need to access this.
+
+enum Type {
+    MESSAGE,      ## Regular chat message.
+    HIGHLIGHT,    ## Highlighted chat message.
+    REDEMPTION,   ## Reward redemption.
+    TIP,          ## Ko-Fi tip received.
+    SHOP,         ## Ko-Fi shop purchase.
+    SUBSCRIPTION, ## New Ko-Fi membership.
+    PIN,          ## Message being pinned.
+    UNPIN,        ## Currently active pin removed.
+    SHOUTOUT,     ## Another user shouted out.
+    RAID,         ## Incoming / outgoing raids.
+    DELETE,       ## Chat message deleted.
+    CLEAR,        ## Chat cleared.
+    SYSTEM,       ## Some messages don't have a unique message type.
+}
+
 var client := EventStreamClient.new()
 
 func _init() -> void:
-	client.connected.connect(_on_connected)
-	client.disconnected.connect(_on_disconnected)
-	client.connection_failed.connect(_on_connection_failed)
-	client.event_received.connect(_on_event_received)
+    client.connected.connect(_on_connected)
+    client.disconnected.connect(_on_disconnected)
+    client.connection_failed.connect(_on_connection_failed)
+    client.event_received.connect(_on_event_received)
 
 func _ready() -> void:
-	if autoconnect:
-		alt_connect()
+    if autoconnect:
+        start()
 
 func _process(_delta: float) -> void:
-	client.poll()
+    client.poll()
 
 func _on_connected() -> void:
-	print("Altstreamer connected")
-	connected.emit()
+    print("Altstreamer connected")
+    connected.emit()
 
 func _on_disconnected(error: String) -> void:
-	if error: print("Altstreamer disconnected: " + error)
-	else: print("Altstreamer disconnected")
-	disconnected.emit()
+    if error: print("Altstreamer disconnected: " + error)
+    else: print("Altstreamer disconnected")
+    disconnected.emit()
 
 func _on_connection_failed(error: String) -> void:
-	if error: print("Altstreamer failed to connect: " + error)
-	else: print("Altstreamer failed to connect")
-	connection_failed.emit()
+    if error: print("Altstreamer failed to connect: " + error)
+    else: print("Altstreamer failed to connect")
+    connection_failed.emit()
 
-func alt_connect(channel_connect: String = channel) -> void:
-	if client.status == EventStreamClient.Status.DISCONNECTED:
-		if not channel_connect.is_empty():
-			client.connect_to_host(HOST, API_ENDPOINT + CHAT_ENDPOINT % channel_connect)
-		else:
-			print("No channel specified for Altstreamer connection")
-	else:
-		print("EventStream not disconnected, could not initiate new connection.")
+func _on_event_received(_event: String, event_data: String) -> void:
+    for msg in JSON.parse_string(event_data):
+        var message := _message_from_msg(msg)
+        var user    := _user_from_msg(msg)
+        var data: Dictionary[String, Variant]
+        data.assign(msg.get("data", {}))
 
-func alt_disconnect() -> void:
-	client.close()
+        match _type_lookup.get(msg.get("type")):
+            Type.MESSAGE      : _handle_message(message, user, msg)
+            Type.HIGHLIGHT    : _handle_highlight(message, user, data)
+            Type.REDEMPTION   : _handle_redemption(message, user, data)
+            Type.TIP          : pass
+            Type.SHOP         : pass # TODO: Implement Ko-Fi events.
+            Type.SUBSCRIPTION : pass
+            Type.PIN          : _handle_pin(data)
+            Type.UNPIN        : chat_message_unpinned.emit()
+            Type.SHOUTOUT     : _handle_shoutout(user, data)
+            Type.RAID         : _handle_raid(user, data)
+            Type.DELETE       : _handle_delete(msg)
+            Type.CLEAR        : chat_cleared.emit()
 
-func _on_event_received(_event: String, data: String) -> void:
-	var messages := JSON.parse_string(data) as Array
-	if not messages: return
+            Type.SYSTEM:
+                if message.text.begins_with("[RAID_CANCEL]"):
+                    raid_outgoing_canceled.emit()
 
-	for msg: Dictionary in messages:
-		var source  := _try_get_string(msg, "source")
-		var message := _message_from_msg(msg)
-		var user    := _user_from_msg(msg)
+func _handle_message(message: AltStreamMessage, user: AltStreamUser, raw_msg: Dictionary) -> void:
+    var sticker_name := _try_get_string(raw_msg, "stickerName")
+    var sticker_url  := _try_get_string(raw_msg, "stickerUrl")
+    if message.text: chat_message_received.emit(user, message)
+    if sticker_name: chat_sticker_received.emit(user, message.id, sticker_name, sticker_url)
 
-		if source == "local":
-			if user.username and user.display_name:
-				if message.text:
-					chat_message_received.emit(user, message)
-				elif message.sticker_url:
-					chat_message_sticker_received.emit(user, message.id, "", message.sticker_url)
-			return
+func _handle_highlight(message: AltStreamMessage, user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+    message.text     = _try_get_string(data, "text")
+    var reward_name := _try_get_string(data, "rewardName")
+    chat_highlight_received.emit(user, message, reward_name)
 
-		# "Special" messages (for the lack of an official name) typically come
-		# in the format "[KIND]:{...}". While `source` may match kind, it may
-		# also just be "system", so we'll just ignore it for this.
-		var special := _special_regex.search(message.text)
-		if special:
-			var kind  := special.get_string(1)
-			var value := special.get_string(2)
-			message.text = "" # Don't ever expose this in our API.
+func _handle_redemption(message: AltStreamMessage, user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+    var reward_name := _try_get_string(data, "rewardName")
+    var user_input  := _try_get_string(data, "userInput") # optional
+    reward_redeemed.emit(user, message.id, reward_name, user_input)
 
-			# Most of these hold a stringified JSON object which we're parsing
-			# here, but there are exceptions, like `[DELETE]` and `[CLEAR_CHAT]`.
-			var obj: Dictionary = JSON.parse_string(value) if value.begins_with("{") else {}
+func _handle_pin(data: Dictionary[String, Variant]) -> void:
+    var user      := _user_from_msg(data)
+    var message   := _message_from_msg(data)
+    var pinned_by := _try_get_string(data, "pinnedBy")
+    chat_message_pinned.emit(user, message, pinned_by)
 
-			match kind:
-				"[HIGHLIGHT]":
-					user.username    = _try_get_string(obj, "from")
-					message.text     = _try_get_string(obj, "text")
-					var reward_name := _try_get_string(obj, "rewardName")
-					if user.username and user.display_name and message.text and reward_name:
-						# Highlighted messages show up mostly as regular
-						# chat messages, so we'll emit them as such.
-						highlight_received.emit(user, message, reward_name)
+func _handle_shoutout(user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+    var target := AltStreamUser.new()
+    target.username     = _try_get_string(data, "targetUsername")
+    target.display_name = _try_get_string(data, "targetDisplayName")
+    target.avatar_url   = _try_get_string(data, "targetAvatar")
+    var game_name      := _try_get_string(data, "gameName")
+    var game_cover_url := _try_get_string(data, "gameCover")
+    user_shouted_out.emit(target, game_name, game_cover_url, user)
 
-				"[CHAT_PIN]":
-					user    = _user_from_msg(obj)
-					message = _message_from_msg(obj)
-					var pinned_by := _try_get_string(obj, "pinnedBy")
-					if user.username and user.display_name and message.text and pinned_by:
-						chat_message_pinned.emit(user, message, pinned_by)
+func _handle_raid(user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+    if data.has("targetUsername"):
+        var target := AltStreamUser.new()
+        target.username     = _try_get_string(data, "targetUsername")
+        target.display_name = _try_get_string(data, "targetDisplayName")
+        target.avatar_url   = _try_get_string(data, "targetImage")
+        var viewers   := _try_get_int(data, "viewers")
+        var countdown := _try_get_int(data, "countdownSeconds")
+        raid_outgoing_started.emit(target, viewers, countdown)
+    else:
+        raid_incoming.emit(user, 0)
 
-				"[CHAT_UNPIN]":
-					chat_message_unpinned.emit()
-
-				"[DELETE]":
-					var message_id := value
-					chat_message_deleted.emit(message_id)
-
-				"[CLEAR_CHAT]":
-					chat_cleared.emit()
-
-				"[RAID_START]":
-					var target := AltStreamUser.new()
-					target.username     = _try_get_string(obj, "targetUsername")
-					target.display_name = _try_get_string(obj, "targetDisplayName")
-					target.avatar_url   = _try_get_string(obj, "targetImage")
-					var viewers   := _try_get_int(obj, "viewers")
-					var countdown := _try_get_int(obj, "countdownSeconds")
-					if target.username and target.display_name:
-						raid_outgoing_started.emit(target, viewers, countdown)
-
-				"[RAID_CANCEL]":
-					raid_outgoing_canceled.emit()
-
-				"[REDEMPTION]":
-					user.username    = _try_get_string(obj, "from")
-					var reward_name := _try_get_string(obj, "rewardName")
-					var user_input  := _try_get_string(obj, "userInput") # optional
-					if user.username and user.display_name and reward_name:
-						reward_redeemed.emit(user, message.id, reward_name, user_input)
-
-				"[SHOUTOUT]":
-					var target := AltStreamUser.new()
-					target.username     = _try_get_string(obj, "targetUsername")
-					target.display_name = _try_get_string(obj, "targetDisplayName")
-					target.avatar_url   = _try_get_string(obj, "targetAvatar")
-					var game_name      := _try_get_string(obj, "gameName")
-					var game_cover_url := _try_get_string(obj, "gameCover")
-					if target.username and target.display_name:
-						shoutout.emit(user, game_name, game_cover_url, user)
-
-				"[KOFI_TIP]":
-					user.username    = _try_get_string(obj, "from")
-					var amount      := _try_get_string(obj, "amount")
-					var currency    := _try_get_string(obj, "currency")
-					var type        := _try_get_string(obj, "type")
-					if user.username:
-						kofi_tip_received.emit(user, type, amount, currency)
-			return
-
-		# Incoming raid notifications have a unique text format that
-		# we need to manually match and parse (see `_raid_regex`).
-		var raid := _raid_regex.search(message.text)
-		if raid:
-			user.username = raid.get_string(1)
-			var raider_count := int(raid.get_string(2))
-			if user.username and user.display_name:
-				raid_incoming.emit(user, raider_count)
-			return
+func _handle_delete(raw_msg: Dictionary) -> void:
+    var target_id := _try_get_string(raw_msg, "targetId")
+    chat_message_deleted.emit(target_id)
 
 
-static var _special_regex := RegEx.create_from_string("^(\\[\\w+\\])(?:\\:(.*))?$")
-static var _raid_regex    := RegEx.create_from_string("^@(\\w+) is raiding with a party of \"(\\d+)\"")
+static var _type_lookup: Dictionary[String, Type]
+static var _role_lookup: Dictionary[String, Role]
+static func _static_init() -> void:
+    for key: String in Type: _type_lookup[key.to_lower()] = Type[key]
+    for key: String in Role: _role_lookup[key.to_lower()] = Role[key]
 
 ## Returns the value associated with `key` from this `Dictionary` as a `String`,
 ## or `default` if it's missing or a different data type (such as `TYPE_NIL`).
 static func _try_get_string(dict: Dictionary, key: String, default := "") -> String:
-	var variant = dict.get(key)
-	return variant if (variant is String) else default
+    var variant = dict.get(key)
+    return variant if (variant is String) else default
 
 static func _try_get_int(dict: Dictionary, key: String, default := -1) -> int:
-	var variant = dict.get(key)
-	if variant is int: return variant
-	elif variant is float: return roundi(variant)
-	else: return default
+    var variant = dict.get(key)
+    if variant is int: return variant
+    elif variant is float: return roundi(variant)
+    else: return default
 
 static func _parse_color(value: String) -> Color:
-	if value.is_empty(): return Color.WHITE
-	var rgb := value.trim_prefix("#").hex_to_int()
-	return Color.hex((rgb << 16) | 0x000000FF)
+    if value.is_empty(): return Color.WHITE
+    var rgb := value.trim_prefix("#").hex_to_int()
+    return Color.hex((rgb << 16) | 0x000000FF)
 
 static func _user_from_msg(msg: Dictionary) -> AltStreamUser:
-	var user := AltStreamUser.new()
-	user.username     = _try_get_string(msg, "authorUsername")
-	user.display_name = _try_get_string(msg, "author")
-	user.avatar_url   = _try_get_string(msg, "authorImage")
-	user.user_color   = _parse_color(
-		_try_get_string(msg, "userColor"))
-	return user
+    var user := AltStreamUser.new()
+    user.username     = _try_get_string(msg, "authorUsername")
+    user.display_name = _try_get_string(msg, "author")
+    user.pronouns     = _try_get_string(msg, "authorPronouns")
+    user.avatar_url   = _try_get_string(msg, "authorImage")
+    user.user_color   = _parse_color(_try_get_string(msg, "userColor"))
+
+    for role: int in Role.values():
+        user.roles[role] = false
+    if msg.get("roles") is Dictionary:
+        for role: String in msg.roles:
+            if _role_lookup.has(role):
+                user.roles[_role_lookup[role]] = (msg.roles[role] == true)
+
+    if msg.get("badges") is Array:
+        for badge: String in msg.badges:
+            if _role_lookup.has(badge):
+                user.badges.append(_role_lookup[badge])
+
+    return user
 
 static func _message_from_msg(msg: Dictionary) -> AltStreamMessage:
-	var message := AltStreamMessage.new()
-	message.id          = _try_get_string(msg, "id")
-	message.text        = _try_get_string(msg, "text")
-	message.sent_at     = _try_get_int(msg, "sentAt")
-	message.sticker_url = _try_get_string(msg, "stickerUrl")
-	message.reply_to_id           = _try_get_string(msg, "replyToId")
-	message.reply_to_username     = _try_get_string(msg, "replyToUsername")
-	message.reply_to_display_name = _try_get_string(msg, "replyToAuthor")
-	return message
+    var message := AltStreamMessage.new()
+    message.id      = _try_get_string(msg, "id")
+    message.text    = _try_get_string(msg, "text")
+    message.sent_at = _try_get_int   (msg, "sentAt")
+    message.reply_to_id           = _try_get_string(msg, "replyToId")
+    message.reply_to_username     = _try_get_string(msg, "replyToUsername")
+    message.reply_to_display_name = _try_get_string(msg, "replyToAuthor")
+    return message
