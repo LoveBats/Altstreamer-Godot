@@ -1,9 +1,0 @@
-class_name AltstreamMessage
-extends RefCounted
-
-var id      : String
-var text    : String
-var sent_at : int
-var reply_to_id           : String
-var reply_to_username     : String
-var reply_to_display_name : String
