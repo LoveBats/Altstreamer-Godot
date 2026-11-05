@@ -2,8 +2,7 @@ class_name AltstreamService
 extends Node
 
 const HOST		:= "https://altstream.online"
-const API_ENDPOINT	:= "/api"
-const CHAT_ENDPOINT	:= "/chat/stream?channel=%s"
+const CHAT_ENDPOINT	:= "/api/chat/stream?channel=%s"
 
 enum Role {
 	BROADCASTER, # The streamer.
@@ -40,7 +39,7 @@ signal user_shouted_out(target: AltstreamUser, game_name: String, game_cover_url
 func start(channel_connect: String = channel) -> void:
 	if client.status == EventStreamClient.Status.DISCONNECTED:
 		if not channel_connect.is_empty():
-			client.connect_to_host(HOST, API_ENDPOINT + CHAT_ENDPOINT % channel_connect)
+			client.connect_to_host(HOST, CHAT_ENDPOINT % channel_connect)
 		else:
 			print("No channel specified for Altstreamer connection")
 	else:
