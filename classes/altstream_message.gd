@@ -1,4 +1,4 @@
-class_name AltStreamMessage
+class_name AltstreamMessage
 extends RefCounted
 
 var id      : String

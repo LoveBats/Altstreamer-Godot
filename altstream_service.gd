@@ -1,4 +1,4 @@
-class_name AltStreamService
+class_name AltstreamService
 extends Node
 
 const HOST		:= "https://altstream.online"
@@ -17,22 +17,22 @@ signal connected
 signal disconnected
 signal connection_failed
 
-signal chat_message_received(user: AltStreamUser, message: AltStreamMessage)
-signal chat_sticker_received(user: AltStreamUser, message_id: String, name: String, url: String)
-signal chat_highlight_received(user: AltStreamUser, message: AltStreamMessage, reward_name: String)
-signal chat_message_pinned(user: AltStreamUser, message: AltStreamMessage, pinned_by: String)
+signal chat_message_received(user: AltstreamUser, message: AltstreamMessage)
+signal chat_sticker_received(user: AltstreamUser, message_id: String, name: String, url: String)
+signal chat_highlight_received(user: AltstreamUser, message: AltstreamMessage, reward_name: String)
+signal chat_message_pinned(user: AltstreamUser, message: AltstreamMessage, pinned_by: String)
 signal chat_message_unpinned()
 signal chat_message_deleted(message_id: String)
 signal chat_cleared()
 
-signal raid_incoming(from: AltStreamUser, _raider_count: int) # raider count currently unavailable
-signal raid_outgoing_started(target: AltStreamUser, viewer_count: int, countdown: int)
+signal raid_incoming(from: AltstreamUser, _raider_count: int) # raider count currently unavailable
+signal raid_outgoing_started(target: AltstreamUser, viewer_count: int, countdown: int)
 signal raid_outgoing_canceled()
 
-#signal kofi_tip_received(from: AltStreamUser, type: String, amount: String, currency: String)
+#signal kofi_tip_received(from: AltstreamUser, type: String, amount: String, currency: String)
 
-signal reward_redeemed(user: AltStreamUser, message_id: String, reward_name: String, user_input: String)
-signal user_shouted_out(target: AltStreamUser, game_name: String, game_cover_url: String, shouted_by: AltStreamUser)
+signal reward_redeemed(user: AltstreamUser, message_id: String, reward_name: String, user_input: String)
+signal user_shouted_out(target: AltstreamUser, game_name: String, game_cover_url: String, shouted_by: AltstreamUser)
 
 @export var autoconnect := true
 @export var channel := ""
@@ -123,18 +123,18 @@ func _on_event_received(_event: String, event_data: String) -> void:
 				if message.text.begins_with("[RAID_CANCEL]"):
 					raid_outgoing_canceled.emit()
 
-func _handle_message(message: AltStreamMessage, user: AltStreamUser, raw_msg: Dictionary) -> void:
+func _handle_message(message: AltstreamMessage, user: AltstreamUser, raw_msg: Dictionary) -> void:
 	var sticker_name := _try_get_string(raw_msg, "stickerName")
 	var sticker_url  := _try_get_string(raw_msg, "stickerUrl")
 	if message.text: chat_message_received.emit(user, message)
 	if sticker_name: chat_sticker_received.emit(user, message.id, sticker_name, sticker_url)
 
-func _handle_highlight(message: AltStreamMessage, user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+func _handle_highlight(message: AltstreamMessage, user: AltstreamUser, data: Dictionary[String, Variant]) -> void:
 	message.text     = _try_get_string(data, "text")
 	var reward_name := _try_get_string(data, "rewardName")
 	chat_highlight_received.emit(user, message, reward_name)
 
-func _handle_redemption(message: AltStreamMessage, user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+func _handle_redemption(message: AltstreamMessage, user: AltstreamUser, data: Dictionary[String, Variant]) -> void:
 	var reward_name := _try_get_string(data, "rewardName")
 	var user_input  := _try_get_string(data, "userInput") # optional
 	reward_redeemed.emit(user, message.id, reward_name, user_input)
@@ -145,8 +145,8 @@ func _handle_pin(data: Dictionary[String, Variant]) -> void:
 	var pinned_by := _try_get_string(data, "pinnedBy")
 	chat_message_pinned.emit(user, message, pinned_by)
 
-func _handle_shoutout(user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
-	var target := AltStreamUser.new()
+func _handle_shoutout(user: AltstreamUser, data: Dictionary[String, Variant]) -> void:
+	var target := AltstreamUser.new()
 	target.username     = _try_get_string(data, "targetUsername")
 	target.display_name = _try_get_string(data, "targetDisplayName")
 	target.avatar_url   = _try_get_string(data, "targetAvatar")
@@ -154,9 +154,9 @@ func _handle_shoutout(user: AltStreamUser, data: Dictionary[String, Variant]) ->
 	var game_cover_url := _try_get_string(data, "gameCover")
 	user_shouted_out.emit(target, game_name, game_cover_url, user)
 
-func _handle_raid(user: AltStreamUser, data: Dictionary[String, Variant]) -> void:
+func _handle_raid(user: AltstreamUser, data: Dictionary[String, Variant]) -> void:
 	if data.has("targetUsername"):
-		var target := AltStreamUser.new()
+		var target := AltstreamUser.new()
 		target.username     = _try_get_string(data, "targetUsername")
 		target.display_name = _try_get_string(data, "targetDisplayName")
 		target.avatar_url   = _try_get_string(data, "targetImage")
@@ -194,8 +194,8 @@ static func _parse_color(value: String) -> Color:
 	var rgb := value.trim_prefix("#").hex_to_int()
 	return Color.hex((rgb << 16) | 0x000000FF)
 
-static func _user_from_msg(msg: Dictionary) -> AltStreamUser:
-	var user := AltStreamUser.new()
+static func _user_from_msg(msg: Dictionary) -> AltstreamUser:
+	var user := AltstreamUser.new()
 	user.username     = _try_get_string(msg, "authorUsername")
 	user.display_name = _try_get_string(msg, "author")
 	user.pronouns     = _try_get_string(msg, "authorPronouns")
@@ -216,8 +216,8 @@ static func _user_from_msg(msg: Dictionary) -> AltStreamUser:
 
 	return user
 
-static func _message_from_msg(msg: Dictionary) -> AltStreamMessage:
-	var message := AltStreamMessage.new()
+static func _message_from_msg(msg: Dictionary) -> AltstreamMessage:
+	var message := AltstreamMessage.new()
 	message.id      = _try_get_string(msg, "id")
 	message.text    = _try_get_string(msg, "text")
 	message.sent_at = _try_get_int   (msg, "sentAt")
